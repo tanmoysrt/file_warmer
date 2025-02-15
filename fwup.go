@@ -26,7 +26,7 @@ EBS throughput Required:
 
 const (
 	blockSize  = 1 * 1024 * 128 // 128KB blocks
-	maxWorkers = 7              // 1 worker can do ~45MB/s
+	maxWorkers = 5              // 1 worker can do ~45MB/s
 )
 
 // Stats struct to track progress and throughput
