@@ -23,13 +23,20 @@ EBS throughput Required:
 
 const (
 	blockSize  = 1 * 1024 * 128 // 128KB blocks
-	maxWorkers = 5 // 1 worker can do 80MB/s
+	maxWorkers = 7             // 1 worker can do ~45MB/s
 )
 
 // Stats struct to track progress and throughput
 type Stats struct {
 	blocksProcessed int64
 	startTime       time.Time
+}
+
+var bufferPool = sync.Pool{ // Use a pointer to sync.Pool
+	New: func() interface{} {
+		arg := make([]byte, blockSize)
+		return &arg
+	},
 }
 
 func main() {
@@ -67,7 +74,7 @@ func main() {
 	go monitorThroughput(stats, done)
 
 	// Create a channel for block numbers
-	blockChan := make(chan int64, maxWorkers)
+	blockChan := make(chan int64, min(maxWorkers*2, int(numBlocks)))
 
 	// Create a WaitGroup to wait for all workers to finish
 	var wg sync.WaitGroup
@@ -75,7 +82,7 @@ func main() {
 	// Start workers
 	for i := 0; i < maxWorkers; i++ {
 		wg.Add(1)
-		go worker(file, blockChan, &wg, stats)
+		go worker(file, blockChan, &wg, stats, &bufferPool)
 	}
 
 	// Send block numbers to channel to be processed
@@ -101,20 +108,21 @@ func main() {
 	fmt.Printf("Average throughput: %.2f MB/s\n", avgThroughput)
 }
 
-func worker(file *os.File, blockChan chan int64, wg *sync.WaitGroup, stats *Stats) {
+func worker(file *os.File, blockChan chan int64, wg *sync.WaitGroup, stats *Stats, bufferPool *sync.Pool) {
 	defer wg.Done()
-
-	buffer := make([]byte, blockSize)
 
 	for blockNum := range blockChan {
 		offset := blockNum * blockSize
 		reader := io.NewSectionReader(file, offset, blockSize)
-		_, err := reader.Read(buffer)
+		buffer := bufferPool.Get().(*[]byte)
+		_, err := reader.Read(*buffer)
 		if err != nil && err != io.EOF {
 			fmt.Printf("Error reading block %d: %v\n", blockNum, err)
+			bufferPool.Put(buffer)
 			continue
 		}
 		atomic.AddInt64(&stats.blocksProcessed, 1)
+		bufferPool.Put(buffer)
 	}
 }
 
@@ -122,25 +130,24 @@ func monitorThroughput(stats *Stats, done chan bool) {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
-	var lastBlocks int64
-	lastTime := stats.startTime
+	lastBlocks := atomic.LoadInt64(&stats.blocksProcessed)
+	lastTime := time.Now()
 
+	var throughput float64
 	for {
 		select {
 		case <-ticker.C:
 			currentBlocks := atomic.LoadInt64(&stats.blocksProcessed)
-			currentTime := time.Now()
+			now := time.Now()
 
-			blocksDelta := currentBlocks - lastBlocks
-			timeDelta := currentTime.Sub(lastTime)
-
-			throughput := float64(blocksDelta) * float64(blockSize) / 1024 / 1024 / timeDelta.Seconds()
+			throughput = float64(currentBlocks-lastBlocks) * float64(blockSize) /
+				(1024 * 1024 * now.Sub(lastTime).Seconds())
 
 			fmt.Printf("Current throughput: %.2f MB/s (Blocks processed: %d)\n",
 				throughput, currentBlocks)
 
 			lastBlocks = currentBlocks
-			lastTime = currentTime
+			lastTime = now
 
 		case <-done:
 			return
