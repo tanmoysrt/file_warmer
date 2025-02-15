@@ -34,6 +34,36 @@ They are designed to read file sequentially.
 
 This `fwup` is designed to get the disk blocks info of a file and read them parallely.
 
+
+#### Best Suit Configuration
+
+AWS has some kind of limitation that we can't cross 300 MB/s anyway while initialization.
+
+**3000 IOPS 300MB/s**
+
+```
+fwup                                                                                                                                                        100% 2356KB 793.4KB/s   00:02    
+Workers running: 5
+Block size: 128 KB
+File size: 10136477638 bytes
+Number of blocks: 77336
+Current throughput: 298.16 MB/s (Blocks processed: 11928)
+Current throughput: 248.51 MB/s (Blocks processed: 21868)
+Current throughput: 248.57 MB/s (Blocks processed: 31811)
+Current throughput: 248.56 MB/s (Blocks processed: 41752)
+Current throughput: 248.50 MB/s (Blocks processed: 51693)
+Current throughput: 248.05 MB/s (Blocks processed: 61615)
+Current throughput: 248.54 MB/s (Blocks processed: 71558)
+
+~~~ Overall Stats ~~~ 
+Total time: 37.91 seconds
+Total data: 9667.00 MB
+Average throughput: 255.02 MB/s
+```
+
+No overhead on running system.
+Just the file read without storing in disk cache.
+
 #### Some Tests
 
 PS: This can be inaccurate based on the file. Need to play with the number of threads also to see what's the limitation by the underlying infra.
