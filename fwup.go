@@ -9,9 +9,21 @@ import (
 	"time"
 )
 
+/*
+128KB blocks
+3000 IOPS
+
+Throughput required to achieve 3000 IOPS:
+
+(128KB*3000)/1024 = 375MB/s
+
+EBS throughput Required:
+~400 MB/s
+*/
+
 const (
-	blockSize  = 1 * 1024 * 1024 // 1MB blocks
-	maxWorkers = 50
+	blockSize  = 1 * 1024 * 128 // 128KB blocks
+	maxWorkers = 5 // 1 worker can do 80MB/s
 )
 
 // Stats struct to track progress and throughput
@@ -31,6 +43,9 @@ func main() {
 		return
 	}
 	defer file.Close()
+
+	fmt.Printf("Workers running: %d\n", maxWorkers)
+	fmt.Printf("Block size: %d KB\n", blockSize/1024)
 
 	// Get file size
 	fileInfo, err := file.Stat()
