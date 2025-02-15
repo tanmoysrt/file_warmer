@@ -6,7 +6,10 @@ import (
 	"os"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 /*
@@ -23,7 +26,7 @@ EBS throughput Required:
 
 const (
 	blockSize  = 1 * 1024 * 128 // 128KB blocks
-	maxWorkers = 7             // 1 worker can do ~45MB/s
+	maxWorkers = 7              // 1 worker can do ~45MB/s
 )
 
 // Stats struct to track progress and throughput
@@ -44,12 +47,21 @@ func main() {
 		fmt.Println("Please provide a file path")
 		return
 	}
-	file, err := os.Open(os.Args[1])
+	file, err := os.OpenFile(os.Args[1], os.O_RDONLY|syscall.O_DIRECT, 0)
 	if err != nil {
 		fmt.Printf("Error opening file: %v\n", err)
 		return
 	}
 	defer file.Close()
+
+	// Tell the kernel to not cache the file
+	// Avoid high memory usage during the block reads
+	// https://man7.org/linux/man-pages/man2/posix_fadvise.2.html
+	err = unix.Fadvise(int(file.Fd()), 0, 0, unix.FADV_DONTNEED)
+	if err != nil {
+		fmt.Printf("Error fadvise: %v\n", err)
+		return
+	}
 
 	fmt.Printf("Workers running: %d\n", maxWorkers)
 	fmt.Printf("Block size: %d KB\n", blockSize/1024)
