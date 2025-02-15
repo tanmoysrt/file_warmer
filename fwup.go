@@ -47,6 +47,8 @@ func main() {
 		fmt.Println("Please provide a file path")
 		return
 	}
+	debugMode := os.Getenv("DEBUG") == "1"
+
 	file, err := os.OpenFile(os.Args[1], os.O_RDONLY|syscall.O_DIRECT, 0)
 	if err != nil {
 		fmt.Printf("Error opening file: %v\n", err)
@@ -83,7 +85,9 @@ func main() {
 		startTime: time.Now(),
 	}
 	done := make(chan bool)
-	go monitorThroughput(stats, done)
+	if debugMode {
+		go monitorThroughput(stats, done)
+	}
 
 	// Create a channel for block numbers
 	blockChan := make(chan int64, min(maxWorkers*2, int(numBlocks)))
@@ -94,7 +98,7 @@ func main() {
 	// Start workers
 	for i := 0; i < maxWorkers; i++ {
 		wg.Add(1)
-		go worker(file, blockChan, &wg, stats, &bufferPool)
+		go worker(file, blockChan, &wg, stats, &bufferPool, debugMode)
 	}
 
 	// Send block numbers to channel to be processed
@@ -107,11 +111,19 @@ func main() {
 	wg.Wait()
 
 	// Signal to exit the goroutines
-	done <- true
+
+	if debugMode {
+		done <- true
+	}
 
 	// Some stats
 	duration := time.Since(stats.startTime)
-	totalData := float64(stats.blocksProcessed) * float64(blockSize) / 1024 / 1024 // MB
+	var totalData float64
+	if debugMode {
+		totalData = float64(stats.blocksProcessed) * float64(blockSize) / 1024 / 1024 // MB
+	} else {
+		totalData = (float64(fileSize) / 1024 / 1024) // MB
+	}
 	avgThroughput := totalData / duration.Seconds()
 
 	fmt.Printf("\n~~~ Overall Stats ~~~ \n")
@@ -120,7 +132,7 @@ func main() {
 	fmt.Printf("Average throughput: %.2f MB/s\n", avgThroughput)
 }
 
-func worker(file *os.File, blockChan chan int64, wg *sync.WaitGroup, stats *Stats, bufferPool *sync.Pool) {
+func worker(file *os.File, blockChan chan int64, wg *sync.WaitGroup, stats *Stats, bufferPool *sync.Pool, debugMode bool) {
 	defer wg.Done()
 
 	for blockNum := range blockChan {
@@ -133,7 +145,9 @@ func worker(file *os.File, blockChan chan int64, wg *sync.WaitGroup, stats *Stat
 			bufferPool.Put(buffer)
 			continue
 		}
-		atomic.AddInt64(&stats.blocksProcessed, 1)
+		if debugMode {
+			atomic.AddInt64(&stats.blocksProcessed, 1)
+		}
 		bufferPool.Put(buffer)
 	}
 }
