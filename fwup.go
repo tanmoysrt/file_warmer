@@ -22,6 +22,9 @@ Throughput required to achieve 3000 IOPS:
 
 EBS throughput Required:
 ~400 MB/s
+
+But, during tests we are not able to achieve more than 298 MB/s.
+with even higher iops + throughput.
 */
 
 const (

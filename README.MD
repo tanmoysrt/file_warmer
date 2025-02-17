@@ -2,7 +2,7 @@
 
 This tool will do nothing but try to read file blocks as fast as possible.
 
-Internally it will spawn up 50 lightweight threads (called goroutine) with 1MB of block size to read multiple part of file at a time.
+Internally it will spawn up ~~50~~ 5 lightweight threads (called goroutine) with ~~1MB~~ 128kb of block size to read multiple part of file at a time.
 
 #### Usage
 
@@ -35,7 +35,7 @@ They are designed to read file sequentially.
 This `fwup` is designed to get the disk blocks info of a file and read them parallely.
 
 
-#### Best Suit Configuration
+#### Best Suite Configuration
 
 AWS has some kind of limitation that we can't cross 300 MB/s anyway while initialization.
 
