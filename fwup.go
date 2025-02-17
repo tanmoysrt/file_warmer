@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -12,37 +15,12 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-/*
-128KB blocks
-3000 IOPS
-
-Throughput required to achieve 3000 IOPS:
-
-(128KB*3000)/1024 = 375MB/s
-
-EBS throughput Required:
-~400 MB/s
-
-But, during tests we are not able to achieve more than 298 MB/s.
-with even higher iops + throughput.
-*/
-
-const (
-	blockSize  = 1 * 1024 * 128 // 128KB blocks
-	maxWorkers = 5              // 1 worker can do ~45MB/s
-)
+const maxWorkers = 10
 
 // Stats struct to track progress and throughput
 type Stats struct {
 	blocksProcessed int64
 	startTime       time.Time
-}
-
-var bufferPool = sync.Pool{ // Use a pointer to sync.Pool
-	New: func() interface{} {
-		arg := make([]byte, blockSize)
-		return &arg
-	},
 }
 
 func main() {
@@ -52,12 +30,43 @@ func main() {
 	}
 	debugMode := os.Getenv("DEBUG") == "1"
 
+	filePath := os.Args[1]
+
+	// Open file with O_DIRECT and O_RDONLY
+	// To prevent going through disk cache + prevent modification to file
+	// Disk cache is useless as on the system free memory will be less
+	// And reading large file will add/remove cache and slow down system and the whole process
 	file, err := os.OpenFile(os.Args[1], os.O_RDONLY|syscall.O_DIRECT, 0)
 	if err != nil {
 		fmt.Printf("Error opening file: %v\n", err)
 		return
 	}
 	defer file.Close()
+
+	// Get file size
+	fileInfo, err := file.Stat()
+	if err != nil {
+		fmt.Printf("Error getting file info: %v\n", err)
+		return
+	}
+	fileSize := fileInfo.Size()
+
+	// Get the disk physical sector block size
+	blockSize, err := GetBlockSizeOfDiskByFile(filePath)
+	if err != nil {
+		fmt.Printf("Error getting block size: %v\n", err)
+		return
+	}
+
+	var workersCount int
+
+	if fileSize < blockSize || fileSize < 10*1024*1024 {
+		// If total file size less than BLOCK_SIZE or less than 10MB
+		// then run only one worker
+		workersCount = 1
+	} else {
+		workersCount = maxWorkers
+	}
 
 	// Tell the kernel to not cache the file
 	// Avoid high memory usage during the block reads
@@ -68,20 +77,15 @@ func main() {
 		return
 	}
 
-	fmt.Printf("Workers running: %d\n", maxWorkers)
-	fmt.Printf("Block size: %d KB\n", blockSize/1024)
-
-	// Get file size
-	fileInfo, err := file.Stat()
-	if err != nil {
-		fmt.Printf("Error getting file info: %v\n", err)
-		return
+	// Create buffer pool
+	// to avoid allocating/deallocating memory for each block
+	// automatically cleared by gc on exit
+	var bufferPool = sync.Pool{
+		New: func() interface{} {
+			arg := make([]byte, blockSize)
+			return &arg
+		},
 	}
-
-	fileSize := fileInfo.Size()
-	fmt.Printf("File size: %d bytes\n", fileSize)
-	numBlocks := (fileSize + blockSize - 1) / blockSize
-	fmt.Printf("Number of blocks: %d\n", numBlocks)
 
 	// Monitor Stats
 	stats := &Stats{
@@ -89,20 +93,27 @@ func main() {
 	}
 	done := make(chan bool)
 	if debugMode {
-		go monitorThroughput(stats, done)
+		go monitorThroughput(stats, blockSize, done)
 	}
 
 	// Create a channel for block numbers
-	blockChan := make(chan int64, min(maxWorkers*2, int(numBlocks)))
+	numBlocks := (fileSize + blockSize - 1) / blockSize
+	blockChan := make(chan int64, min(workersCount*2, int(numBlocks)))
 
 	// Create a WaitGroup to wait for all workers to finish
 	var wg sync.WaitGroup
 
 	// Start workers
-	for i := 0; i < maxWorkers; i++ {
+	for i := 0; i < workersCount; i++ {
 		wg.Add(1)
-		go worker(file, blockChan, &wg, stats, &bufferPool, debugMode)
+		go worker(file, blockSize, blockChan, &wg, stats, &bufferPool, debugMode)
 	}
+
+	// Print some info
+	fmt.Printf("Workers running: %d\n", workersCount)
+	fmt.Printf("Block size: %d KB\n", blockSize/1024)
+	fmt.Printf("File size: %d bytes\n", fileSize)
+	fmt.Printf("Number of blocks: %d\n", numBlocks)
 
 	// Send block numbers to channel to be processed
 	for blockNum := int64(0); blockNum < numBlocks; blockNum++ {
@@ -113,8 +124,7 @@ func main() {
 	// Wait for all workers to finish
 	wg.Wait()
 
-	// Signal to exit the goroutines
-
+	// Signal to exit the monitor
 	if debugMode {
 		done <- true
 	}
@@ -135,7 +145,7 @@ func main() {
 	fmt.Printf("Average throughput: %.2f MB/s\n", avgThroughput)
 }
 
-func worker(file *os.File, blockChan chan int64, wg *sync.WaitGroup, stats *Stats, bufferPool *sync.Pool, debugMode bool) {
+func worker(file *os.File, blockSize int64, blockChan chan int64, wg *sync.WaitGroup, stats *Stats, bufferPool *sync.Pool, debugMode bool) {
 	defer wg.Done()
 
 	for blockNum := range blockChan {
@@ -155,7 +165,7 @@ func worker(file *os.File, blockChan chan int64, wg *sync.WaitGroup, stats *Stat
 	}
 }
 
-func monitorThroughput(stats *Stats, done chan bool) {
+func monitorThroughput(stats *Stats, blockSize int64, done chan bool) {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
@@ -182,4 +192,33 @@ func monitorThroughput(stats *Stats, done chan bool) {
 			return
 		}
 	}
+}
+
+// GetBlockSizeOfDiskByFile: Try to find the disk of file and then get the block size in bytes
+func GetBlockSizeOfDiskByFile(file_path string) (int64, error) {
+	// find disk name by df
+	output, err := exec.Command("df", "-h", "--output=source", file_path).Output()
+	if err != nil {
+		return 0, fmt.Errorf("error getting disk name: %v", err)
+	}
+	lines := strings.Split(string(output), "\n")
+	if len(lines) < 2 {
+		return 0, fmt.Errorf("error getting disk name: %v", err)
+	}
+	disk_name := strings.TrimSpace(lines[1])
+
+	// get block size by lsblk
+	output, err = exec.Command("lsblk", "--output=PHY-SEC", disk_name).Output()
+	if err != nil {
+		return 0, fmt.Errorf("error getting block size: %v", err)
+	}
+	lines = strings.Split(string(output), "\n")
+	if len(lines) < 2 {
+		return 0, fmt.Errorf("error getting block size: %v", err)
+	}
+	block_size, err := strconv.ParseInt(strings.TrimSpace(lines[1]), 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("error converting block size: %v", err)
+	}
+	return block_size * 1024, nil
 }
