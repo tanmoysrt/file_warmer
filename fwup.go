@@ -15,6 +15,15 @@ import (
 
 var logger = log.New(os.Stdout, "", log.LstdFlags)
 
+const blockSize int64 = 1024 * 256          // 256 KB
+const psyncWorkersCount int = 4             // Number of workers
+const smallFileSize int64 = 1024 * 1024 * 2 // 2MB
+
+type FileReadRequest struct {
+	fd     int
+	offset int64
+}
+
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Println("Please provide file paths")
@@ -74,8 +83,6 @@ func warmupFilesUsingPsync(files []*os.File) {
 		logger.Println("No files to warmup")
 		return
 	}
-	const blockSize int64 = 1024 * 296 // 296 KB
-	const workersCount int = 4         // Number of workers
 
 	// Find the largest file size
 	var largestFileSize int64
@@ -89,69 +96,62 @@ func warmupFilesUsingPsync(files []*os.File) {
 		}
 	}
 
-	// Create buffer pool
-	// to avoid allocating/deallocating memory for each block
-	// automatically cleared by gc on exit
-	var bufferPool = sync.Pool{
-		New: func() interface{} {
-			arg := make([]byte, blockSize)
-			return &arg
-		},
-	}
-
 	// Create a channel for block numbers
 	numBlocks := (largestFileSize + blockSize - 1) / blockSize
+	blockChan := make(chan FileReadRequest, min(psyncWorkersCount*2, int(numBlocks)))
+
+	// Create a WaitGroup to wait for all workers to finish
+	var wg sync.WaitGroup
+
+	// Start workers
+	for i := 0; i < psyncWorkersCount; i++ {
+		wg.Add(1)
+		go psyncWorker(blockChan, &wg)
+	}
 
 	for _, file := range files {
 		logger.Printf("Warming up file: %s\n", file.Name())
-		blockChan := make(chan int64, min(workersCount*2, int(numBlocks)))
+
+		fd := int(file.Fd())
 
 		// Tell the kernel to not cache the file
 		// Avoid high memory usage during the block reads
 		// https://man7.org/linux/man-pages/man2/posix_fadvise.2.html
-		err := unix.Fadvise(int(file.Fd()), 0, 0, unix.FADV_DONTNEED)
+		err := unix.Fadvise(fd, 0, 0, unix.FADV_DONTNEED)
 		if err != nil {
 			logger.Printf("Error fadvise: %v\n", err)
 			continue
 		}
 
-		// Create a WaitGroup to wait for all workers to finish
-		var wg sync.WaitGroup
-
-		// Start workers
-		for i := 0; i < workersCount; i++ {
-			wg.Add(1)
-			go psyncWorker(file, blockSize, blockChan, &wg, &bufferPool)
-		}
-
 		// Send block numbers to channel to be processed
 		for blockNum := int64(0); blockNum < numBlocks; blockNum++ {
-			blockChan <- blockNum
+			blockChan <- FileReadRequest{fd: fd, offset: blockNum * blockSize}
 		}
-
-		// Close the channel
-		close(blockChan)
-
-		// Wait for all workers to finish
-		wg.Wait()
 
 	}
 
+	// Close the channel
+	close(blockChan)
+
+	// Wait for all workers to finish
+	wg.Wait()
+
 }
 
-func psyncWorker(file *os.File, blockSize int64, blockChan chan int64, wg *sync.WaitGroup, bufferPool *sync.Pool) {
+func psyncWorker(blockChan chan FileReadRequest, wg *sync.WaitGroup) {
 	defer wg.Done()
 
-	for blockNum := range blockChan {
-		offset := blockNum * blockSize
-		reader := io.NewSectionReader(file, offset, blockSize)
-		buffer := bufferPool.Get().(*[]byte)
-		_, err := reader.Read(*buffer)
-		if err != nil && err != io.EOF {
-			logger.Printf("Error reading block %d: %v\n", blockNum, err)
-			bufferPool.Put(buffer)
+	// Create buffer for each worker
+	// To avoid internal sync lock on buffer pool
+	buffer := make([]byte, blockSize)
+
+	for details := range blockChan {
+		_, err := unix.Pread(details.fd, buffer, details.offset)
+		// reader := io.NewSectionReader(file, offset, blockSize)
+		// _, err := reader.Read(buffer)
+		if err != nil && err != syscall.EIO && err != io.EOF {
+			logger.Printf("Error reading block at offset %d: %v\n", details.offset, err)
 			continue
 		}
-		bufferPool.Put(buffer)
 	}
 }

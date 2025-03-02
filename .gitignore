@@ -5,3 +5,4 @@ fwup
 *.txt
 *.py
 main.go
+*.json
