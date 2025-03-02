@@ -1,1 +1,7 @@
 fwup
+*.glass
+*.h
+*.so
+*.txt
+*.py
+main.go
