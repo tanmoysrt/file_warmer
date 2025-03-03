@@ -3,6 +3,9 @@ fwup
 *.h
 *.so
 *.txt
-*.py
+main.py
 main.go
 *.json
+lib
+!lib/.gitkeep
+__pycache__

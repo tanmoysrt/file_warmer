@@ -1,6 +1,7 @@
 package main
 
 import (
+	"C"
 	"io"
 	"log"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"github.com/iceber/iouring-go"
 	"golang.org/x/sys/unix"
 )
+import "unsafe"
 
 // const blockSize int64 = 1024 * 256          // 256 KB
 // const psyncWorkersCount int = 4             // Number of workers
@@ -30,7 +32,21 @@ type FileReadRequest struct {
 
 func main() {}
 
-func WarmupFiles(filePaths []string, method FileIOMethod, smallFileSizeThreshold int64, blockSizeForSmallFiles int64, blockSizeForLargeFiles int64, smallFilesWorkerCount int, largeFilesWorkerCount int) {
+//export WarmupFiles
+func WarmupFiles(filePaths **C.char, filePathCount C.int, method *C.char, smallFileSizeThreshold C.long, blockSizeForSmallFiles C.long, blockSizeForLargeFiles C.long, smallFilesWorkerCount C.int, largeFilesWorkerCount C.int) {
+	// Convert the C char array back to a Go slice
+	length := int(filePathCount)
+	tmpSlice := (*[1 << 30]*C.char)(unsafe.Pointer(filePaths))[:length:length]
+	goFilePaths := make([]string, length)
+	for i := 0; i < length; i++ {
+		goFilePaths[i] = C.GoString(tmpSlice[i])
+	}
+
+	// Call the Go function with converted values
+	warmupFiles(goFilePaths, FileIOMethod(C.GoString(method)), int64(smallFileSizeThreshold), int64(blockSizeForSmallFiles), int64(blockSizeForLargeFiles), int(smallFilesWorkerCount), int(largeFilesWorkerCount))
+}
+
+func warmupFiles(filePaths []string, method FileIOMethod, smallFileSizeThreshold int64, blockSizeForSmallFiles int64, blockSizeForLargeFiles int64, smallFilesWorkerCount int, largeFilesWorkerCount int) {
 	var logger = log.New(os.Stdout, "", log.LstdFlags)
 
 	var totalFileSize int64
