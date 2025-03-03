@@ -1,46 +1,40 @@
 package main
 
 import (
-	"fmt"
 	"io"
 	"log"
 	"os"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/iceber/iouring-go"
 	"golang.org/x/sys/unix"
 )
 
-var logger = log.New(os.Stdout, "", log.LstdFlags)
+// const blockSize int64 = 1024 * 256          // 256 KB
+// const psyncWorkersCount int = 4             // Number of workers
+// const smallFileSize int64 = 1024 * 1024 * 2 // 2MB
 
-const blockSize int64 = 1024 * 256          // 256 KB
-const psyncWorkersCount int = 4             // Number of workers
-const smallFileSize int64 = 1024 * 1024 * 2 // 2MB
+type FileIOMethod string
+
+const (
+	PosixSync FileIOMethod = "psync"
+	IOUring   FileIOMethod = "io_uring"
+)
 
 type FileReadRequest struct {
 	fd     int
 	offset int64
 }
 
-func main() {
-	if len(os.Args) < 2 {
-		fmt.Println("Please provide file paths")
-		return
-	}
+func main() {}
 
-	filePathsStr := os.Args[1]
-	warmupFiles(strings.Split(filePathsStr, ","), true)
-}
+func WarmupFiles(filePaths []string, method FileIOMethod, smallFileSizeThreshold int64, blockSizeForSmallFiles int64, blockSizeForLargeFiles int64, smallFilesWorkerCount int, largeFilesWorkerCount int) {
+	var logger = log.New(os.Stdout, "", log.LstdFlags)
 
-func warmupFiles(filePaths []string, showStats bool) {
 	var totalFileSize int64
-	var startTime time.Time
-
-	if showStats {
-		startTime = time.Now()
-	}
+	var startTime = time.Now()
 
 	var files []*os.File
 	for _, filePath := range filePaths {
@@ -51,40 +45,56 @@ func warmupFiles(filePaths []string, showStats bool) {
 		file, err := os.OpenFile(filePath, os.O_RDONLY|syscall.O_DIRECT, 0)
 		if err != nil {
 			logger.Printf("Error opening file: %v\n", err)
-			return
+			continue
 		}
 		defer file.Close()
 		files = append(files, file)
+	}
 
-		if showStats {
-			fileInfo, err := file.Stat()
-			if err != nil {
-				logger.Printf("Error getting file info: %v\n", err)
-				return
-			}
-			totalFileSize += fileInfo.Size()
+	// Separate small and large files
+	var smallFiles []*os.File
+	var largeFiles []*os.File
+	for _, file := range files {
+		fileInfo, err := file.Stat()
+		if err != nil {
+			logger.Printf("Error getting file info: %v\n", err)
+			continue
 		}
+		if fileInfo.Size() <= smallFileSizeThreshold {
+			smallFiles = append(smallFiles, file)
+		} else {
+			largeFiles = append(largeFiles, file)
+		}
+		totalFileSize += fileInfo.Size()
 	}
 
-	warmupFilesUsingPsync(files)
+	var wg sync.WaitGroup
+	wg.Add(2)
 
-	if showStats {
-		totalData := (float64(totalFileSize) / 1024 / 1024) // MB
-		duration := time.Since(startTime)
-		fmt.Printf("\n~~~ Overall Stats ~~~ \n")
-		fmt.Printf("Total time: %.2f seconds\n", duration.Seconds())
-		fmt.Printf("Total data: %.2f MB\n", totalData)
-		fmt.Printf("Average throughput: %.2f MB/s\n", totalData/duration.Seconds())
-	}
+	// Always run a single thread for small files
+	warmupFileGroup(smallFiles, method, blockSizeForSmallFiles, smallFilesWorkerCount, &wg, logger)
+	warmupFileGroup(largeFiles, method, blockSizeForLargeFiles, largeFilesWorkerCount, &wg, logger)
+
+	// Log stats
+	totalData := (float64(totalFileSize) / 1024 / 1024) // MB
+	duration := time.Since(startTime)
+	logger.Printf("\n~~~ Overall Stats ~~~ \n")
+	logger.Printf("Total time: %.2f seconds\n", duration.Seconds())
+	logger.Printf("Total data: %.2f MB\n", totalData)
+	logger.Printf("Average throughput: %.2f MB/s\n", totalData/duration.Seconds())
+
 }
 
-func warmupFilesUsingPsync(files []*os.File) {
+func warmupFileGroup(files []*os.File, method FileIOMethod, blockSize int64, workersCount int, wg *sync.WaitGroup, logger *log.Logger) {
+	defer wg.Done()
+
 	if len(files) == 0 {
 		logger.Println("No files to warmup")
 		return
 	}
 
 	// Find the largest file size
+	// To calculate length of channel
 	var largestFileSize int64
 	for _, file := range files {
 		fileInfo, err := file.Stat()
@@ -98,15 +108,15 @@ func warmupFilesUsingPsync(files []*os.File) {
 
 	// Create a channel for block numbers
 	numBlocks := (largestFileSize + blockSize - 1) / blockSize
-	blockChan := make(chan FileReadRequest, min(psyncWorkersCount*2, int(numBlocks)))
+	blockChan := make(chan FileReadRequest, min(workersCount*2, int(numBlocks)))
 
 	// Create a WaitGroup to wait for all workers to finish
-	var wg sync.WaitGroup
+	var workerWg sync.WaitGroup
 
 	// Start workers
-	for i := 0; i < psyncWorkersCount; i++ {
-		wg.Add(1)
-		go psyncWorker(blockChan, &wg)
+	for i := 0; i < workersCount; i++ {
+		workerWg.Add(1)
+		go warmupWorker(blockChan, blockSize, &workerWg, method, logger)
 	}
 
 	for _, file := range files {
@@ -135,23 +145,64 @@ func warmupFilesUsingPsync(files []*os.File) {
 
 	// Wait for all workers to finish
 	wg.Wait()
-
 }
 
-func psyncWorker(blockChan chan FileReadRequest, wg *sync.WaitGroup) {
+func warmupWorker(blockChan chan FileReadRequest, blockSize int64, wg *sync.WaitGroup, method FileIOMethod, logger *log.Logger) {
 	defer wg.Done()
 
 	// Create buffer for each worker
-	// To avoid internal sync lock on buffer pool
+	// To avoid internal sync lock on buffer pool sync.pool
 	buffer := make([]byte, blockSize)
 
+	var prepRequests []iouring.PrepRequest
+	var iour *iouring.IOURing
+	var err error
+
+	if method == IOUring {
+		prepRequests = make([]iouring.PrepRequest, 0, 64)
+		iour, err = iouring.New(68) // Keep some extra space
+		if err != nil {
+			logger.Printf("Error creating iouring: %v\n", err)
+			return
+		}
+		defer iour.Close()
+	}
+
 	for details := range blockChan {
-		_, err := unix.Pread(details.fd, buffer, details.offset)
-		// reader := io.NewSectionReader(file, offset, blockSize)
-		// _, err := reader.Read(buffer)
-		if err != nil && err != syscall.EIO && err != io.EOF {
-			logger.Printf("Error reading block at offset %d: %v\n", details.offset, err)
-			continue
+		// Submit requests in batches of 64
+		if method == IOUring {
+			req := iouring.Pread(details.fd, buffer, uint64(details.offset))
+			prepRequests = append(prepRequests, req)
+			if len(prepRequests) >= 64 {
+				request, err := iour.SubmitRequests(prepRequests, nil)
+				if err != nil {
+					logger.Printf("Error submitting requests: %v\n", err)
+					continue
+				}
+				<-request.Done()
+				prepRequests = prepRequests[:0]
+			}
+		}
+
+		// Just read blocks one by one in case of PosixSync
+		if method == PosixSync {
+			_, err := unix.Pread(details.fd, buffer, details.offset)
+			if err != nil && err != syscall.EIO && err != io.EOF {
+				logger.Printf("Error reading block at offset %d: %v\n", details.offset, err)
+				continue
+			}
+		}
+	}
+
+	if method == IOUring {
+		// Submit any remaining requests
+		if len(prepRequests) > 0 {
+			request, err := iour.SubmitRequests(prepRequests, nil)
+			if err != nil {
+				logger.Printf("Error submitting requests: %v\n", err)
+				return
+			}
+			<-request.Done()
 		}
 	}
 }
