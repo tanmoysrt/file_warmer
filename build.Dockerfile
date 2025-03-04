@@ -3,7 +3,7 @@ FROM ubuntu:18.04
 # Pre requisites
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt update -y && \
-    apt install -y wget ca-certificates g++-aarch64-linux-gnu g++-arm-linux-gnueabi python3-dev python3 python3-pip --no-install-recommends
+    apt install -y wget ca-certificates g++-aarch64-linux-gnu g++-arm-linux-gnueabi python3-dev python3 python3-pip gcc g++ clang --no-install-recommends
 
 # Install golang 1.22.1x
 RUN wget https://go.dev/dl/go1.22.1.linux-amd64.tar.gz  -O /go1.22.1.linux-amd64.tar.gz
@@ -14,5 +14,5 @@ RUN pip3 install -U pip setuptools wheel
 RUN pip3 install twine
 
 ENV PATH=$PATH:/usr/local/go/bin
-ENV CGO_ENABLED=0
+ENV CGO_ENABLED=1
 ENV TWINE_USERNAME=__token__
