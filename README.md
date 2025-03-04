@@ -7,13 +7,13 @@ It's useful to initialize/pre-warm volumes.
 ### Installation
 
 ```bash
-pip install file_warmer
+pip install filewarmer
 ```
 
 ### Usage
 
 ```python
-from file_warmer import FWUP
+from filewarmer import FWUP
 
 fwup = FWUP()
 fwup.warmup(
