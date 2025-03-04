@@ -1,4 +1,4 @@
-module fwup
+module file_warmer
 
 go 1.22.12
 

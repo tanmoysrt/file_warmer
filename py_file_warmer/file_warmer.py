@@ -67,9 +67,9 @@ class FWUP:
         """Find and load the appropriate library."""
         machine = platform.machine().lower()
         if machine == "x86_64" or machine == "amd64":
-            lib_name = "fwup_linux_amd64.so"
+            lib_name = "file_warmer_linux_amd64.so"
         elif machine == "aarch64" or machine == "arm64":
-            lib_name = "fwup_linux_arm64.so"
+            lib_name = "file_warmer_linux_arm64.so"
         else:
             raise RuntimeError(f"Unsupported Linux architecture: {machine}")
 
