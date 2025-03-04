@@ -12,6 +12,5 @@ __pycache__
 build
 dist
 py_fwup.egg-info
-file_warmer
-file_warmer.egg-info
-py_file_warmer/README.md
+filewarmer.egg-info
+filewarmer/README.md

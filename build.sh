@@ -25,10 +25,8 @@ if [ -z "$TWINE_PASSWORD" ]; then
   exit 1
 fi
 
-GOOS=linux GOARCH=amd64 go1.22.12 build -buildmode=c-shared -o ./py_file_warmer/lib/file_warmer_linux_amd64.so
-GOOS=linux GOARCH=arm64 CC=aarch64-linux-gnu-gcc go1.22.12 build -buildmode=c-shared -o ./py_file_warmer/lib/file_warmer_linux_arm64.so
-cp ./README.md ./py_file_warmer/
-cd py_file_warmer
+GOOS=linux GOARCH=amd64 go1.22.12 build -buildmode=c-shared -o ./filewarmer/lib/file_warmer_linux_amd64.so
+GOOS=linux GOARCH=arm64 CC=aarch64-linux-gnu-gcc go1.22.12 build -buildmode=c-shared -o ./filewarmer/lib/file_warmer_linux_arm64.so
 rm -rf dist
 rm -rf build
 pip install twine

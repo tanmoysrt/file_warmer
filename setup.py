@@ -1,14 +1,14 @@
-from setuptools import setup, find_packages
+from setuptools import setup
 
 setup(
-    name="file_warmer",
-    version="0.0.5",
+    name="filewarmer",
+    version="0.0.7",
     description="Library to read file blocks as fast as possible",
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
-    packages=find_packages(),
+    packages=["filewarmer"],
     package_data={
-        "file_warmer": ["lib/*.h", "lib/*.so"],
+        "filewarmer": ["lib/*.h", "lib/*.so"],
     },
     classifiers=[
         "Programming Language :: Python :: 3",
