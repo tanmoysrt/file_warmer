@@ -6,6 +6,6 @@ fwup
 main.py
 main.go
 *.json
-lib
-!lib/.gitkeep
+lib/**
+!lib/.keep
 __pycache__

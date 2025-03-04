@@ -94,7 +94,7 @@ func warmupFiles(filePaths []string, method FileIOMethod, smallFileSizeThreshold
 	// Log stats
 	totalData := (float64(totalFileSize) / 1024 / 1024) // MB
 	duration := time.Since(startTime)
-	logger.Printf("\n~~~ Overall Stats ~~~ \n")
+	logger.Printf("~~~ Overall Stats ~~~ \n")
 	logger.Printf("Total time: %.2f seconds\n", duration.Seconds())
 	logger.Printf("Total data: %.2f MB\n", totalData)
 	logger.Printf("Average throughput: %.2f MB/s\n", totalData/duration.Seconds())
@@ -160,7 +160,7 @@ func warmupFileGroup(files []*os.File, method FileIOMethod, blockSize int64, wor
 	close(blockChan)
 
 	// Wait for all workers to finish
-	wg.Wait()
+	workerWg.Wait()
 }
 
 func warmupWorker(blockChan chan FileReadRequest, blockSize int64, wg *sync.WaitGroup, method FileIOMethod, logger *log.Logger) {
