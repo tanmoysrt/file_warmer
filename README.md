@@ -1,6 +1,6 @@
-### fwup - File Warm Up
+### filewarmer - File Warm Up Helper
 
-This tool will do nothing but try to read file blocks as fast as possible.
+This library will do nothing but try to read file blocks as fast as possible.
 
 It's useful to initialize/pre-warm volumes.
 
