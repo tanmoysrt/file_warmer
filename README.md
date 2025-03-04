@@ -32,6 +32,12 @@ fwup.warmup(
 - For io_uring, it's recommended to use Linux Kernel 5.1 or higher.
 - For io_uring, use a single thread to submit the requests.
 
+### Build + Publish
+
+```bash
+TWINE_PASSWORD=xxxxxx VERSION=0.0.10 ./build.sh
+```
+
 ### License
 
 Apache 2.0
