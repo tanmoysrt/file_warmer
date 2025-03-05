@@ -1,3 +1,6 @@
+Moved to https://github.com/frappe/press/tree/master/libs/filewarmer
+---
+
 ### filewarmer - File Warm Up Helper
 
 This library will do nothing but try to read file blocks as fast as possible.
